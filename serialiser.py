@@ -1,10 +1,21 @@
 import sys
 import importlib
+from typing import Any
 
 SERIALISED_SIGNATURE = ("__module__", "__name__", "values")
 
 
-def serialise(obj, no_head=False) -> dict:
+def serialise(obj: Any, no_head: bool = False) -> dict:
+    """Takes any non-primitive object and serialises it into a dict.
+    Arguments:
+        obj(Any): Any non primitive object.
+        no_head(bool): Will not specify the module and class of the object when True.
+    Returns:
+        dict: A serialised dictionary of all the values of an object. May also contain the module and class.
+    Raises:
+         TypeError: Raised when a built in object is given.
+
+    """
     if obj.__class__.__module__ == '__builtin__':
         raise TypeError("Can't serialise a builtin type.")
 
@@ -35,7 +46,20 @@ def serialise(obj, no_head=False) -> dict:
         return dct
 
 
-def deserialise(dct: dict, cls=None):
+def deserialise(dct: dict, cls: Any = None) -> Any:
+    """Takes a dict and deserialises it back into its object.
+    Arguments:
+        dct(dict): The data to be deserialised.
+        cls(Any): The object class. Must be specified if the dict is headless.
+    Returns:
+        Any: The original object that was serialised.
+    Raises:
+        ValueError: No class was specified for a headless dict.
+        ModuleNotFoundError: Could not find the class specified in the dict header.
+        RecursionError: A subclass deserialisation is causing a, most likely, infinite recursion.
+        AttributeError: A nested, serialised object did not have a header.
+        TypeError: The given class is not the same as the one stored in the dict header.
+    """
     headless = tuple(dct.keys()) != SERIALISED_SIGNATURE
     if cls is None:
         if headless:
@@ -49,15 +73,22 @@ def deserialise(dct: dict, cls=None):
             except KeyError:
                 raise ModuleNotFoundError(f"Could not find module '{dct['module']}' containing {dct['__name__']}"
                                           "Pass the class to be instantiated instead.")
-        cls = getattr(module, dct["__name__"])
+        try:
+            cls = getattr(module, dct["__name__"])
+        except AttributeError:
+            raise ModuleNotFoundError(f"Could not find {dct['__name__']} in {cls.__name__}. "
+                                      "Most likely an invalid module.")
 
     if headless or cls.__name__ == dct["__name__"]:
         for attr, val in dct["values"].items():
             if isinstance(val, dict):
                 if tuple(val.keys()) == SERIALISED_SIGNATURE:
-                    dct["values"][attr] = deserialise(val)
+                    try:
+                        dct["values"][attr] = deserialise(val)
+                    except RecursionError:
+                        raise RecursionError(f"Recursion caused most likely by looping subclass ({val})")
                 elif tuple(val.keys()) == ("values",):
-                    raise ValueError(f"Cannot deserialise a headless subclass ({val})")
+                    raise AttributeError(f"Cannot deserialise a headless subclass ({val})")
         obj = cls.__new__(cls, **dct["values"])
         for attr, val in dct["values"].items():
             setattr(obj, attr, val)
